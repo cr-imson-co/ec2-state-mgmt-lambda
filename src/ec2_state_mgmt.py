@@ -216,7 +216,7 @@ def lambda_handler(event, context):
         else:
             LAMBDA.logger.info('No instances to start.')
 
-        if (len(start_instances)) > 0:
+        if (len(stop_instances)) > 0:
             for instance in stop_instances:
                 LAMBDA.logger.info(f'Stopping instance {instance.id}')
 
