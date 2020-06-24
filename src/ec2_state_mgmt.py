@@ -223,7 +223,7 @@ def lambda_handler(event, context):
                 try:
                     instance.stop()
                 except Exception as ex: # pylint: disable=W0703
-                    LAMBDA.logger.error(f'Failed to start instance {instance.id}', exc_info=ex)
+                    LAMBDA.logger.error(f'Failed to stop instance {instance.id}', exc_info=ex)
                     failure_count += 1
         else:
             LAMBDA.logger.info('No instances to stop.')
