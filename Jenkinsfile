@@ -48,12 +48,30 @@ pipeline {
         HOME = "${env.WORKSPACE}"
       }
       steps {
-        sh "pip install --user --no-cache --progress-bar off -r ${env.WORKSPACE}/deps/xraylayer/requirements.txt"
-        sh "pip install --user --no-cache --progress-bar off -e ${env.WORKSPACE}/deps/crimsoncore/lib/"
-        sh "pip install --user --no-cache --progress-bar off -r ${env.WORKSPACE}/deps/crimsoncore/deps/boto3/requirements.txt"
-        sh "pip install --user --no-cache --progress-bar off -r ${env.WORKSPACE}/deps/crimsoncore/deps/pytz/requirements.txt"
+        sh label: 'install aws-xray dependency',
+          script: "pip install --user --no-cache --progress-bar off -r ${env.WORKSPACE}/deps/xraylayer/requirements.txt"
 
-        sh "find ${env.WORKSPACE}/src -type f -iname '*.py' -print0 | xargs -0 python -m pylint"
+        sh label: 'installl crimsoncore dependency',
+          script: "pip install --user --no-cache --progress-bar off -e ${env.WORKSPACE}/deps/crimsoncore/lib/"
+
+        sh label: 'install boto3 dependency',
+          script: "pip install --user --no-cache --progress-bar off -r ${env.WORKSPACE}/deps/crimsoncore/deps/boto3/requirements.txt"
+
+        sh label: 'install pytz dependency',
+          script: "pip install --user --no-cache --progress-bar off -r ${env.WORKSPACE}/deps/crimsoncore/deps/pytz/requirements.txt"
+
+        sh label: 'run pylint',
+          script: "find ${env.WORKSPACE}/src -type f -iname '*.py' -print0 | xargs -0 python -m pylint"
+      }
+    }
+
+    stage('Run tests') {
+      environment {
+        HOME = "${env.WORKSPACE}"
+      }
+      steps {
+        sh label: 'run unit tests',
+          script: 'python -m unittest discover'
       }
     }
 

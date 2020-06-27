@@ -4,9 +4,9 @@ ec2-state-mgmt-lambda is an AWS Lambda developed to handle daily EC2 state manag
 
 ## invocation
 
-lambda should be invoked by CloudWatch events; recommended invoke times are within several minutes of :00, and within several minutes of :30 every hour.
+lambda should be invoked by CloudWatch events; recommended invoke times are within several minutes of :00, :15, :30, and :45 every hour.
 
-e.g. invoking at `XX:03` and `XX:33`, using an AWS CloudWatch cron expression of `3,33 * * * ? *`
+e.g. invoking at `XX:03`, `XX:18`, `XX:33`, `XX:48`, using an AWS CloudWatch cron expression of `3,18,33,48 * * * ? *`
 
 ## configuration
 
@@ -28,9 +28,9 @@ Please note that support for legacy tags is for backwards compatibility and ever
 
 ### modern tags
 
-* `{'ec2_start': 'XX:00'}` OR `{'ec2_start': 'XX:30'}` - used to enforce start time of ~XX:00 or ~XX:30, depending on when the lambda is run.
-* `{'ec2_stop': 'XX:00'}` OR `{'ec2_stop': 'XX:30'}` - used to enforce stop time of ~XX:00 or ~XX:30, depending on when the lambda is run.
-* `{'ec2_quiet_weekends': 'true'}` - used to prevent state management start events on weekends (Saturday and Sunday); stop events still occur in the event that systems were manually started.
+* `{'ec2_start': 'XX:00'}` OR `{'ec2_start': 'XX:15'}` OR `{'ec2_start': 'XX:30'}` OR `{'ec2_start': 'XX:45'}` - used to enforce start time of ~XX:00, ~XX:15, ~XX:30, or ~XX:45, depending on when the lambda is run.
+* `{'ec2_stop': 'XX:00'}` OR `{'ec2_stop': 'XX:15'}` OR `{'ec2_stop': 'XX:30'}` OR `{'ec2_stop': 'XX:45'}` - used to enforce stop time of ~XX:00, ~XX:15, ~XX:30, or ~XX:45, depending on when the lambda is run.
+* `{'ec2_start_on_weekends': 'true'}` - used to force state management start events on weekends (Saturday and Sunday); stop events still occur in the event that systems were manually started.
 
 ## license
 
