@@ -16,16 +16,6 @@ ec2-state-mgmt-lambda is configured via tags on ec2 instances themselves, and en
 
 * `STATE_MGMT_TIMEZONE` - a string, containing the name of the timezone the Lambda should use when handling all time-oriented logic for determining start and stop event qualifications.  See [pytz documentation](https://pypi.org/project/pytz/) for information on the timezone names.
 
-### legacy tags
-
-Please note that support for legacy tags is for backwards compatibility and every effort should be made to avoid them.
-
-* `{'scheduled': 'true'}` - legacy tag, used to enforce hardcoded start time of ~XX:XX, and hardcoded stop time of ~XX:XX.
-* `{'scheduled_on': 'true'}` - legacy tag, used to enforce a hardcoded start time of ~06:00.
-* `{'scheduled_off': 'true'}` - legacy tag, used to enforce a hardcoded stop time of ~18:00.
-* `{'auto_on': 'XX'}` - legacy tag, used to enforce a variable start time of ~XX:00, where XX is specified by the tag.
-* `{'auto_off': 'XX'}` - legacy tag, used to enforce a variable stop time of ~XX:00, where XX is specified by the tag.
-
 ### modern tags
 
 * `{'ec2_start': 'XX:00'}` OR `{'ec2_start': 'XX:15'}` OR `{'ec2_start': 'XX:30'}` OR `{'ec2_start': 'XX:45'}` - used to enforce start time of ~XX:00, ~XX:15, ~XX:30, or ~XX:45, depending on when the lambda is run.

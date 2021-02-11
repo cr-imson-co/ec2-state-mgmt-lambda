@@ -48,17 +48,8 @@ pipeline {
         HOME = "${env.WORKSPACE}"
       }
       steps {
-        sh label: 'install aws-xray dependency',
-          script: "pip install --user --no-cache --progress-bar off -r ${env.WORKSPACE}/deps/xraylayer/requirements.txt"
-
-        sh label: 'installl crimsoncore dependency',
-          script: "pip install --user --no-cache --progress-bar off -e ${env.WORKSPACE}/deps/crimsoncore/lib/"
-
-        sh label: 'install boto3 dependency',
-          script: "pip install --user --no-cache --progress-bar off -r ${env.WORKSPACE}/deps/crimsoncore/deps/boto3/requirements.txt"
-
-        sh label: 'install pytz dependency',
-          script: "pip install --user --no-cache --progress-bar off -r ${env.WORKSPACE}/deps/crimsoncore/deps/pytz/requirements.txt"
+        sh label: 'install dependencies',
+          script: "pip install --user --no-cache --progress-bar off -r ${env.WORKSPACE}/deps/boto3layer/requirements.txt"
 
         sh label: 'run pylint',
           script: "find ${env.WORKSPACE}/src -type f -iname '*.py' -print0 | xargs -0 python -m pylint"

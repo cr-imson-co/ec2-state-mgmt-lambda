@@ -12,21 +12,23 @@
 # pylint: disable=C0301,C0330,W1203
 
 from datetime import datetime
+import json
+import logging
 import re
 from os import environ
+import boto3
 import pytz
-
-from crimsoncore import LambdaCore
 
 from aws_xray_sdk.core import patch_all # pylint: disable=C0411
 patch_all()
 
 LAMBDA_NAME = 'ec2-state-mgmt'
-LAMBDA = LambdaCore(LAMBDA_NAME)
+logger = logging.getLogger(LAMBDA_NAME)
+logger.setLevel(logging.INFO if environ.get('DEBUG_MODE') == 'true' else logging.DEBUG)
+
 if environ.get('CI') != 'true':
-    LAMBDA.init_ec2()
-    LAMBDA.init_s3()
-    LAMBDA.init_sns()
+    ec2 = boto3.resource('ec2', region_name=environ.get('AWS_REGION'))
+    sns = boto3.resource('sns', region_name=environ.get('AWS_REGION'))
 
 # note: time should be specified in 24hr time and according to the configured STATE_MGMT_TIMEZONE
 HARDCODED_START = '06:00'.split(':')[0]
@@ -66,7 +68,7 @@ def get_hour_phase(current_minute):
 def check_tag_time_format(instance, time_type, time_value):
     ''' Check to see if the time specified for an ec2_start or ec2_stop value is correctly formatted. '''
     if not re.match(TIME_PATTERN, time_value):
-        LAMBDA.logger.warning(f'Instance {instance.id} tag value for "{time_type}" tag is incorrectly formatted, ignoring')
+        logger.warning(f'Instance {instance.id} tag value for "{time_type}" tag is incorrectly formatted, ignoring')
         return False
 
     return True
@@ -78,16 +80,16 @@ def tag_list_to_dict(tags):
 def check_configured_time(instance, time_type, minute_value):
     ''' Massages user-specified minute value for ec2_start and ec2_stop to a sane value. '''
     if 0 < int(minute_value) < 15:
-        LAMBDA.logger.warning(f'Invalid minute specifier for instance {instance.id} {time_type} time (specified :{minute_value}, assuming :00)')
+        logger.warning(f'Invalid minute specifier for instance {instance.id} {time_type} time (specified :{minute_value}, assuming :00)')
         minute_value = '00'
     elif 15 < int(minute_value) < 30:
-        LAMBDA.logger.warning(f'Invalid minute specifier for instance {instance.id} {time_type} time (specified :{minute_value}, assuming :15)')
+        logger.warning(f'Invalid minute specifier for instance {instance.id} {time_type} time (specified :{minute_value}, assuming :15)')
         minute_value = '15'
     elif 30 < int(minute_value) < 45:
-        LAMBDA.logger.warning(f'Invalid minute specifier for instance {instance.id} {time_type} time (specified :{minute_value}, assuming :30)')
+        logger.warning(f'Invalid minute specifier for instance {instance.id} {time_type} time (specified :{minute_value}, assuming :30)')
         minute_value = '30'
     elif 45 < int(minute_value) < 60:
-        LAMBDA.logger.warning(f'Invalid minute specifier for instance {instance.id} {time_type} time (specified :{minute_value}, assuming :45)')
+        logger.warning(f'Invalid minute specifier for instance {instance.id} {time_type} time (specified :{minute_value}, assuming :45)')
         minute_value = '45'
 
     return minute_value
@@ -95,7 +97,7 @@ def check_configured_time(instance, time_type, minute_value):
 def _filter_start_instances(instance, current_hour, hour_phase, is_weekend): # pylint: disable=R0911
     state = instance.state.get('Name')
     if state != 'stopped':
-        LAMBDA.logger.debug(f'Instance {instance.id} is not stopped (status: {state}), ignoring')
+        logger.debug(f'Instance {instance.id} is not stopped (status: {state}), ignoring')
         return False
 
     tags = tag_list_to_dict(instance.tags)
@@ -104,38 +106,14 @@ def _filter_start_instances(instance, current_hour, hour_phase, is_weekend): # p
     # notes:
     # - forces start events to process during weekends if the ec2_start_on_weekends tag is set to "true"
     if is_weekend and ('ec2_start_on_weekends' not in tags or tags['ec2_start_on_weekends'].lower() != 'true'):
-        LAMBDA.logger.debug(f'Instance {instance.id} is not tagged with "ec2_start_on_weekends" and it is a weekend, ignoring')
+        logger.debug(f'Instance {instance.id} is not tagged with "ec2_start_on_weekends" and it is a weekend, ignoring')
         return False
-
-    # LEGACY TAG
-    # supports {'scheduled' => 'true'}
-    # notes:
-    # - midhour events are not supported with this tag
-    if 'scheduled' in tags and tags['scheduled'].lower() == 'true':
-        LAMBDA.logger.debug(f'Instance {instance.id} is tagged with "scheduled" tag')
-        return current_hour == HARDCODED_START and hour_phase == StateManagementPhase.PHASE_ONE
-
-    # LEGACY TAG
-    # supports {'scheduled_on' => 'true'}
-    # notes:
-    # - midhour events are not supported with this tag
-    if 'scheduled_on' in tags and tags['scheduled_on'].lower() == 'true':
-        LAMBDA.logger.debug(f'Instance {instance.id} is tagged with "scheduled_on" tag')
-        return current_hour == HARDCODED_START and hour_phase == StateManagementPhase.PHASE_ONE
-
-    # LEGACY TAG
-    # supports {'auto_on' => 'XX'}
-    # notes:
-    # - midhour events are not supported with this tag
-    if 'auto_on' in tags and tags['auto_on'].lower() != 'false':
-        LAMBDA.logger.debug(f'Instance {instance.id} is tagged with "auto_on" tag')
-        return tags['auto_on'] == current_hour and hour_phase == StateManagementPhase.PHASE_ONE
 
     # supports {'ec2_start' => 'XX:00'}, {'ec2_start' => 'XX:15'}, {'ec2_start' => 'XX:30'} and {'ec2_start' => 'XX:45'}
     # notes:
     # - additional specificity in the ec2 tag is ignored! don't try to be cheeky and say XX:48.  it will not be supported.
     if 'ec2_start' in tags:
-        LAMBDA.logger.debug(f'Instance {instance.id} is tagged with "ec2_start" tag')
+        logger.debug(f'Instance {instance.id} is tagged with "ec2_start" tag')
 
         if not check_tag_time_format(instance, 'ec2_start', tags['ec2_start']):
             return False
@@ -157,40 +135,16 @@ def _filter_start_instances(instance, current_hour, hour_phase, is_weekend): # p
 def _filter_stop_instances(instance, current_hour, hour_phase): # pylint: disable=R0911
     state = instance.state.get('Name')
     if state != 'running':
-        LAMBDA.logger.debug(f'Instance {instance.id} is not running (status: {state}), ignoring')
+        logger.debug(f'Instance {instance.id} is not running (status: {state}), ignoring')
         return False
 
     tags = tag_list_to_dict(instance.tags)
-
-    # LEGACY TAG
-    # supports {'scheduled' => 'true'}
-    # notes:
-    # - midhour events are not supported with this tag
-    if 'scheduled' in tags and tags['scheduled'].lower() == 'true':
-        LAMBDA.logger.debug(f'Instance {instance.id} is tagged with "scheduled" tag')
-        return current_hour == HARDCODED_STOP and hour_phase == StateManagementPhase.PHASE_ONE
-
-    # LEGACY TAG
-    # supports {'scheduled_off' => 'true'}
-    # notes:
-    # - midhour events are not supported with this tag
-    if 'scheduled_off' in tags and tags['scheduled_off'].lower() == 'true':
-        LAMBDA.logger.debug(f'Instance {instance.id} is tagged with "scheduled_off" tag')
-        return current_hour == HARDCODED_STOP and hour_phase == StateManagementPhase.PHASE_ONE
-
-    # LEGACY TAG
-    # supports {'auto_off' => 'XX'}
-    # notes:
-    # - midhour events are not supported with this tag
-    if 'auto_off' in tags and tags['auto_off'].lower() != 'false':
-        LAMBDA.logger.debug(f'Instance {instance.id} is tagged with "auto_off" tag')
-        return tags['auto_off'] == current_hour and hour_phase == StateManagementPhase.PHASE_ONE
 
     # supports {'ec2_stop' => 'XX:00'}, {'ec2_stop' => 'XX:15'}, {'ec2_stop' => 'XX:30'} and {'ec2_stop' => 'XX:45'}
     # notes:
     # - additional specificity in the ec2 tag is ignored! don't try to be cheeky and say XX:48.  it will not be supported.
     if 'ec2_stop' in tags:
-        LAMBDA.logger.debug(f'Instance {instance.id} is tagged with "ec2_stop" tag')
+        logger.debug(f'Instance {instance.id} is tagged with "ec2_stop" tag')
 
         if not check_tag_time_format(instance, 'ec2_stop', tags['ec2_stop']):
             return False
@@ -214,9 +168,9 @@ def filter_start_instances(instance, current_hour, hour_phase, is_weekend):
     result = _filter_start_instances(instance, current_hour, hour_phase, is_weekend)
 
     if result:
-        LAMBDA.logger.debug(f'Instance {instance.id} identified as qualifying for sending start event')
+        logger.debug(f'Instance {instance.id} identified as qualifying for sending start event')
     else:
-        LAMBDA.logger.debug(f'Instance {instance.id} does not qualify for start event, ignoring')
+        logger.debug(f'Instance {instance.id} does not qualify for start event, ignoring')
 
     return result
 
@@ -225,15 +179,16 @@ def filter_stop_instances(instance, current_hour, hour_phase):
     result = _filter_stop_instances(instance, current_hour, hour_phase)
 
     if result:
-        LAMBDA.logger.debug(f'Instance {instance.id} identified as qualifying for sending stop event')
+        logger.debug(f'Instance {instance.id} identified as qualifying for sending stop event')
     else:
-        LAMBDA.logger.debug(f'Instance {instance.id} does not qualify for stop event, ignoring')
+        logger.debug(f'Instance {instance.id} does not qualify for stop event, ignoring')
 
     return result
 
 def lambda_handler(event, context): # pylint: disable=C0116,W0613,R0912,R0915
     try:
-        timezone = pytz.timezone(LAMBDA.config.val('STATE_MGMT_TIMEZONE', default_override='UTC'))
+
+        timezone = pytz.timezone(environ.get('STATE_MGMT_TIMEZONE') or 'UTC')
         now = datetime.now(timezone)
 
         current_hour, current_minute = get_invoke_time(now)
@@ -245,45 +200,58 @@ def lambda_handler(event, context): # pylint: disable=C0116,W0613,R0912,R0915
         #   get a full instance list and roll with it up front.
         #
         # also, pylint apparently doesn't understand that LAMBDA.ec2 is lazy-loaded...
-        instances = list(LAMBDA.ec2.instances.all()) # pylint: disable=E1101
+        instances = list(ec2.instances.all()) # pylint: disable=E1101
 
-        LAMBDA.logger.debug(f'Retrieved {len(instances)} instances total')
+        logger.debug(f'Retrieved {len(instances)} instances total')
 
         start_instances = list(filter(lambda instance_list: filter_start_instances(instance_list, current_hour, hour_phase, is_weekend), instances[:]))
         stop_instances = list(filter(lambda instance_list: filter_stop_instances(instance_list, current_hour, hour_phase), instances[:]))
 
-        LAMBDA.logger.debug(f'Filtered instances to start down to {len(start_instances)} instances total')
-        LAMBDA.logger.debug(f'Filtered instances to stop down to {len(stop_instances)} instances total')
+        logger.debug(f'Filtered instances to start down to {len(start_instances)} instances total')
+        logger.debug(f'Filtered instances to stop down to {len(stop_instances)} instances total')
 
         failure_count = 0
         if (len(start_instances)) > 0:
             for instance in start_instances:
-                LAMBDA.logger.info(f'Starting instance {instance.id}')
+                logger.info(f'Starting instance {instance.id}')
 
                 try:
                     instance.start()
                 except Exception as ex: # pylint: disable=W0703
-                    LAMBDA.logger.error(f'Failed to start instance {instance.id}', exc_info=ex)
+                    logger.error(f'Failed to start instance {instance.id}', exc_info=ex)
                     failure_count += 1
         else:
-            LAMBDA.logger.info('No instances to start.')
+            logger.info('No instances to start.')
 
         if (len(stop_instances)) > 0:
             for instance in stop_instances:
-                LAMBDA.logger.info(f'Stopping instance {instance.id}')
+                logger.info(f'Stopping instance {instance.id}')
 
                 try:
                     instance.stop()
                 except Exception as ex: # pylint: disable=W0703
-                    LAMBDA.logger.error(f'Failed to stop instance {instance.id}', exc_info=ex)
+                    logger.error(f'Failed to stop instance {instance.id}', exc_info=ex)
                     failure_count += 1
         else:
-            LAMBDA.logger.info('No instances to stop.')
+            logger.info('No instances to stop.')
 
         if failure_count:
             raise RecoveredError(f'{failure_count} instance control failures occurred')
     except Exception as ex:
-        LAMBDA.logger.error('Fatal error during script runtime', exc_info=ex)
-        LAMBDA.send_notification('error', f'{LAMBDA_NAME} lambda error notification; reference logstream {LAMBDA.config.get_log_stream()}')
+        logger.error('Fatal error during script runtime', exc_info=ex)
+
+        if environ.get('NOTIFICATION_ARN'):
+            log_stream = environ.get('AWS_LAMBDA_LOG_STREAM_NAME')
+            sns.publish(
+                TargetArn=environ.get('NOTIFICATION_ARN'),
+                Message=json.dumps({'default':
+                    json.dumps({
+                        'type': 'error',
+                        'lambda': LAMBDA_NAME,
+                        'message': f'{LAMBDA_NAME} lambda error notification; reference logstream {log_stream}'
+                    })
+                }),
+                MessageStructure='json'
+            )
 
         raise
