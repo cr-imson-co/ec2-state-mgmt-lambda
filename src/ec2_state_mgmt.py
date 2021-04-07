@@ -9,22 +9,41 @@
 #
 '''
 
-# pylint: disable=C0301,C0330,W1203
-
 from datetime import datetime
+from enum import Enum
 import json
 import logging
 import re
 from os import environ
+
 import boto3
 import pytz
+from aws_xray_sdk.core import patch_all
+from pythonjsonlogger import jsonlogger
 
-from aws_xray_sdk.core import patch_all # pylint: disable=C0411
 patch_all()
 
 LAMBDA_NAME = 'ec2-state-mgmt'
-logger = logging.getLogger(LAMBDA_NAME)
-logger.setLevel(logging.INFO if environ.get('DEBUG_MODE') == 'true' else logging.DEBUG)
+logger = logging.getLogger()
+logger.setLevel(logging.DEBUG if environ.get('DEBUG_MODE') == 'true' else logging.INFO)
+
+class CustomJsonFormatter(jsonlogger.JsonFormatter):
+    '''
+    Customizations for JSON formatting
+    '''
+    def add_fields(self, log_record, record, message_dict):
+        '''
+        Add level field for our use.
+        '''
+        super().add_fields(log_record, record, message_dict)
+
+        if log_record.get('level'):
+            log_record['level'] = log_record['level'].upper()
+        else:
+            log_record['level'] = record.levelname
+
+for handler in logger.handlers:
+    handler.setFormatter(CustomJsonFormatter(timestamp=True))
 
 if environ.get('CI') != 'true':
     ec2 = boto3.resource('ec2', region_name=environ.get('AWS_REGION'))
@@ -33,9 +52,10 @@ if environ.get('CI') != 'true':
 # note: time should be specified in 24hr time and according to the configured STATE_MGMT_TIMEZONE
 HARDCODED_START = '06:00'.split(':')[0]
 HARDCODED_STOP = '18:00'.split(':')[0]
-TIME_PATTERN = re.compile('^([01][0-9]|2[0-3]):[0-5][0-9]$') # pylint: disable=W1401
+TIME_PATTERN = re.compile('^([01][0-9]|2[0-3]):[0-5][0-9]$')
 
-class StateManagementPhase: # pylint: disable=C0115,R0903
+class StateManagementPhase(Enum):
+    ''' Helper enum '''
     PHASE_ONE = 1   # :00 - :14
     PHASE_TWO = 2   # :15 - :29
     PHASE_THREE = 3 # :30 - :44
@@ -94,7 +114,7 @@ def check_configured_time(instance, time_type, minute_value):
 
     return minute_value
 
-def _filter_start_instances(instance, current_hour, hour_phase, is_weekend): # pylint: disable=R0911
+def _filter_start_instances(instance, current_hour, hour_phase, is_weekend):
     state = instance.state.get('Name')
     if state != 'stopped':
         logger.debug(f'Instance {instance.id} is not stopped (status: {state}), ignoring')
@@ -133,6 +153,9 @@ def _filter_start_instances(instance, current_hour, hour_phase, is_weekend): # p
     return False
 
 def _filter_stop_instances(instance, current_hour, hour_phase): # pylint: disable=R0911
+    '''
+    Function to filter out which instances should be stopped, given the current hour and hour_phase (quarter hour)
+    '''
     state = instance.state.get('Name')
     if state != 'running':
         logger.debug(f'Instance {instance.id} is not running (status: {state}), ignoring')
@@ -153,7 +176,7 @@ def _filter_stop_instances(instance, current_hour, hour_phase): # pylint: disabl
         if current_hour == tag_hour:
             tag_minute = check_configured_time(instance, 'ec2_stop', tag_minute)
 
-            if ((hour_phase == StateManagementPhase.PHASE_ONE and tag_minute == '00') # pylint: disable=R0916
+            if ((hour_phase == StateManagementPhase.PHASE_ONE and tag_minute == '00') # pylint: disable=too-many-boolean-expressions
                 or (hour_phase == StateManagementPhase.PHASE_TWO and tag_minute == '15')
                 or (hour_phase == StateManagementPhase.PHASE_THREE and tag_minute == '30')
                 or (hour_phase == StateManagementPhase.PHASE_FOUR and tag_minute == '45')
@@ -185,7 +208,8 @@ def filter_stop_instances(instance, current_hour, hour_phase):
 
     return result
 
-def lambda_handler(event, context): # pylint: disable=C0116,W0613,R0912,R0915
+def lambda_handler(_event, _context):
+    ''' Lambda handler '''
     try:
 
         timezone = pytz.timezone(environ.get('STATE_MGMT_TIMEZONE') or 'UTC')
@@ -204,8 +228,12 @@ def lambda_handler(event, context): # pylint: disable=C0116,W0613,R0912,R0915
 
         logger.debug(f'Retrieved {len(instances)} instances total')
 
-        start_instances = list(filter(lambda instance_list: filter_start_instances(instance_list, current_hour, hour_phase, is_weekend), instances[:]))
-        stop_instances = list(filter(lambda instance_list: filter_stop_instances(instance_list, current_hour, hour_phase), instances[:]))
+        start_instances = list(filter(
+            lambda instance_list: filter_start_instances(instance_list, current_hour, hour_phase, is_weekend), instances[:]
+        ))
+        stop_instances = list(filter(
+            lambda instance_list: filter_stop_instances(instance_list, current_hour, hour_phase), instances[:]
+        ))
 
         logger.debug(f'Filtered instances to start down to {len(start_instances)} instances total')
         logger.debug(f'Filtered instances to stop down to {len(stop_instances)} instances total')
